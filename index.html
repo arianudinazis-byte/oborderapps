@@ -1,3 +1,11 @@
+Berikut adalah kode yang sudah diperbarui agar penyimpanannya berubah dari `localStorage` (offline/lokal) menjadi **Online Real-time menggunakan Google Sheets API**.
+
+**Penting Sebelum Menyalin Kode:**
+Anda wajib mengganti teks `MASUKKAN_URL_WEB_APP_GOOGLE_APPS_SCRIPT_ANDA_DISINI` pada baris `485` dengan link URL Web App yang Anda dapatkan dari langkah *Deploy* di Google Apps Script sebelumnya.
+
+Silakan salin seluruh kode berikut dan perbarui file `index.html` Anda:
+
+```html
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -441,6 +449,12 @@
   <div class="app-shell">
     <div id="toast" class="toast"></div>
 
+    <!-- LOADING OVERLAY -->
+    <div id="loading-overlay" class="modal-overlay" style="z-index:999;flex-direction:column;color:white;font-weight:bold;background:rgba(15,15,26,0.85)">
+      <i class="fas fa-circle-notch fa-spin text-4xl mb-4 text-brand-400"></i>
+      <span>Sinkronisasi Data...</span>
+    </div>
+
     <!-- SCREEN: ROLE SELECT -->
     <div id="screen-role" class="screen active">
       <div class="flex-1 flex flex-col" style="background: linear-gradient(165deg, #EEF2FF 0%, #F8FAFC 40%, #FFF 100%);">
@@ -452,7 +466,6 @@
                 <i class="fas fa-utensils text-brand-600 text-3xl"></i>
               </div>
             </div>
-            <!-- Diubah warnanya menjadi ungu (text-brand-600) dengan background kotak putih agar kontras & senada dengan logo -->
             <div class="inline-block bg-white/95 px-5 py-2 rounded-2xl shadow-md mb-1">
               <h1 class="text-2xl font-extrabold text-brand-600 tracking-tight">OB Food Order</h1>
             </div>
@@ -490,7 +503,7 @@
           <div class="mt-8 text-center">
             <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/80 border border-slate-100">
               <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
-              <span class="text-[11px] text-slate-400 font-medium">Data tersimpan di perangkat ini</span>
+              <span class="text-[11px] text-slate-400 font-medium">Data terhubung secara online</span>
             </div>
           </div>
         </div>
@@ -656,9 +669,15 @@
             <p class="text-indigo-200 text-xs font-medium" id="ob-date"></p>
             <h2 class="text-xl font-extrabold text-white tracking-tight">Dashboard OB</h2>
           </div>
-          <button onclick="showScreen('screen-role')" class="btn-ghost w-10 h-10 rounded-xl flex items-center justify-center">
-            <i class="fas fa-sign-out-alt text-sm"></i>
-          </button>
+          <div class="flex gap-2">
+            <!-- Tombol Refresh Data untuk OB -->
+            <button onclick="refreshData()" class="btn-ghost w-10 h-10 rounded-xl flex items-center justify-center">
+              <i class="fas fa-sync-alt text-sm"></i>
+            </button>
+            <button onclick="showScreen('screen-role')" class="btn-ghost w-10 h-10 rounded-xl flex items-center justify-center">
+              <i class="fas fa-sign-out-alt text-sm"></i>
+            </button>
+          </div>
         </div>
         <div class="grid grid-cols-3 gap-2.5 relative z-10">
           <div class="bg-white/15 backdrop-blur-sm rounded-2xl p-3 text-center border border-white/10">
@@ -892,16 +911,17 @@
   </div>
 
   <script>
-    const STORAGE_KEY = 'ob_food_order_v3';
+    // =====================================================================
+    // MASUKKAN URL GOOGLE APPS SCRIPT ANDA DI BAWAH INI
+    // =====================================================================
+    const API_URL = 'https://script.google.com/macros/s/AKfycbzDBZyPhgbWJYOngz-K8R6ic8lsZf-mLLflnMvrMWfjXycIcBEbIQNXSp_yH0bHYK_2/exec'; 
+    // =====================================================================
+
     const AVATAR_COLORS = [
-      'linear-gradient(135deg,#6366F1,#8B5CF6)',
-      'linear-gradient(135deg,#10B981,#34D399)',
-      'linear-gradient(135deg,#F59E0B,#FBBF24)',
-      'linear-gradient(135deg,#EF4444,#F87171)',
-      'linear-gradient(135deg,#3B82F6,#60A5FA)',
-      'linear-gradient(135deg,#EC4899,#F472B6)',
-      'linear-gradient(135deg,#14B8A6,#2DD4BF)',
-      'linear-gradient(135deg,#8B5CF6,#A78BFA)'
+      'linear-gradient(135deg,#6366F1,#8B5CF6)', 'linear-gradient(135deg,#10B981,#34D399)',
+      'linear-gradient(135deg,#F59E0B,#FBBF24)', 'linear-gradient(135deg,#EF4444,#F87171)',
+      'linear-gradient(135deg,#3B82F6,#60A5FA)', 'linear-gradient(135deg,#EC4899,#F472B6)',
+      'linear-gradient(135deg,#14B8A6,#2DD4BF)', 'linear-gradient(135deg,#8B5CF6,#A78BFA)'
     ];
     const STATUS_LABEL = { diterima: 'Diterima', siap: 'Siap Diambil', selesai: 'Selesai' };
     const STATUS_CLASS = { diterima: 'status-diterima', siap: 'status-siap', selesai: 'status-selesai' };
@@ -915,84 +935,93 @@
       tempSellerImg: null, tempMenuImg: null
     };
 
-    function loadState() {
+    // Fungsi pembantu (helper)
+    function safeParse(str) { try { return JSON.parse(str); } catch(e) { return []; } }
+    function uid() { return 'id_'+Date.now()+'_'+Math.random().toString(36).substr(2,5); }
+    function formatRp(n) { return 'Rp '+(n||0).toLocaleString('id-ID'); }
+    function avatarColor(name) {
+      let h = 0; for(let i=0;i<name.length;i++) h = name.charCodeAt(i)+((h<<5)-h);
+      return AVATAR_COLORS[Math.abs(h)%AVATAR_COLORS.length];
+    }
+    function initial(name) { return (name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+    
+    function avatarHtml(name, img, size) {
+      const s = size || 48; const r = size ? Math.round(size*0.3) : 14; const fs = size ? Math.round(size*0.35) : 18;
+      if (img) return `<div class="avatar" style="width:${s}px;height:${s}px;border-radius:${r}px"><img src="${img}" alt=""></div>`;
+      return `<div class="avatar" style="width:${s}px;height:${s}px;border-radius:${r}px;font-size:${fs}px;background:${avatarColor(name)}">${initial(name)}</div>`;
+    }
+    function menuImgHtml(menu, size) {
+      const s = size || 56;
+      if (menu.img) return `<img class="menu-img" style="width:${s}px;height:${s}px" src="${menu.img}" alt="">`;
+      return `<div class="menu-img-placeholder" style="width:${s}px;height:${s}px">🍽️</div>`;
+    }
+    function showToast(msg) {
+      const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }
+
+    // =========================================================
+    // SINKRONISASI DATABASE GOOGLE SHEETS
+    // =========================================================
+    async function loadState() {
+      if (API_URL === 'MASUKKAN_URL_WEB_APP_GOOGLE_APPS_SCRIPT_ANDA_DISINI') {
+        showToast("PERINGATAN: URL Google Sheets API belum diatur!");
+        return;
+      }
+      document.getElementById('loading-overlay').classList.add('active');
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const d = JSON.parse(saved);
-          state.sellers = d.sellers || [];
-          state.orders = d.orders || [];
-          // Migrate old orders without status
-          state.orders.forEach(o => {
-            if (!o.status) o.status = 'diterima';
-          });
-        }
-      } catch(e) {}
-      if (state.sellers.length === 0) seedDemoData();
+        const resSellers = await fetch(API_URL + '?sheet=Sellers');
+        const dataSellers = await resSellers.json();
+        state.sellers = dataSellers.map(s => ({ ...s, menus: safeParse(s.menus) }));
+
+        const resOrders = await fetch(API_URL + '?sheet=Orders');
+        const dataOrders = await resOrders.json();
+        state.orders = dataOrders.map(o => ({ ...o, items: safeParse(o.items) }));
+
+        if (state.sellers.length === 0) await seedDemoData();
+      } catch(e) {
+        console.error(e);
+        showToast('Gagal memuat data dari server');
+      }
+      document.getElementById('loading-overlay').classList.remove('active');
+
+      // Refresh tampilan jika ada layar aktif
+      const activeScreen = document.querySelector('.screen.active').id;
+      if (activeScreen === 'screen-ob-dashboard') renderOBDashboard();
+      if (activeScreen === 'screen-emp-sellers') renderEmpSellers();
+      if (activeScreen === 'screen-emp-orders') renderEmpOrders();
     }
 
-    function saveState() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ sellers: state.sellers, orders: state.orders }));
+    async function saveState() {
+      document.getElementById('loading-overlay').classList.add('active');
+      try {
+        await Promise.all([
+          fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'save', sheet: 'Sellers', rows: state.sellers }) }),
+          fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'save', sheet: 'Orders', rows: state.orders }) })
+        ]);
+      } catch(e) {
+        console.error(e);
+        showToast('Gagal menyimpan ke server');
+      }
+      document.getElementById('loading-overlay').classList.remove('active');
     }
 
-    function seedDemoData() {
+    async function refreshData() {
+      await loadState();
+      showToast('Data terbaru berhasil ditarik ✅');
+    }
+
+    async function seedDemoData() {
       state.sellers = [
         { id:'s1', name:'Warung Bu Siti', wa:'6281234567890', note:'Buka 10:00–14:00', img:null, menus:[
           {id:'m1',name:'Nasi Goreng',price:15000,desc:'Nasi goreng spesial telur',img:null},
           {id:'m2',name:'Mie Goreng',price:14000,desc:'Mie goreng telur ayam',img:null},
-          {id:'m3',name:'Nasi Ayam',price:18000,desc:'Nasi + ayam goreng crispy',img:null},
-          {id:'m4',name:'Es Teh Manis',price:5000,desc:'',img:null}
-        ]},
-        { id:'s2', name:'Kedai Mas Budi', wa:'6289876543210', note:'Makanan berat & snack', img:null, menus:[
-          {id:'m5',name:'Soto Ayam',price:16000,desc:'Soto ayam kuah bening',img:null},
-          {id:'m6',name:'Gado-gado',price:13000,desc:'Sayur + bumbu kacang',img:null},
-          {id:'m7',name:'Bakso Urat',price:15000,desc:'Bakso urat + mie',img:null},
-          {id:'m8',name:'Es Jeruk',price:6000,desc:'',img:null}
-        ]},
-        { id:'s3', name:'Warung Mbak Ani', wa:'6281122334455', note:'Spesialis Padang', img:null, menus:[
-          {id:'m9',name:'Nasi Padang',price:20000,desc:'Nasi + lauk pilih',img:null},
-          {id:'m10',name:'Rendang',price:25000,desc:'Porsi kecil',img:null},
-          {id:'m11',name:'Ayam Pop',price:18000,desc:'',img:null}
+          {id:'m3',name:'Es Teh Manis',price:5000,desc:'',img:null}
         ]}
       ];
-      saveState();
+      await saveState();
     }
-
-    function uid() { return 'id_'+Date.now()+'_'+Math.random().toString(36).substr(2,5); }
-    function formatRp(n) { return 'Rp '+(n||0).toLocaleString('id-ID'); }
-    function avatarColor(name) {
-      let h = 0;
-      for (let i=0;i<name.length;i++) h = name.charCodeAt(i)+((h<<5)-h);
-      return AVATAR_COLORS[Math.abs(h)%AVATAR_COLORS.length];
-    }
-    function initial(name) {
-      return (name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-    }
-
-    function avatarHtml(name, img, size) {
-      const s = size || 48;
-      const r = size ? Math.round(size*0.3) : 14;
-      const fs = size ? Math.round(size*0.35) : 18;
-      if (img) {
-        return '<div class="avatar" style="width:'+s+'px;height:'+s+'px;border-radius:'+r+'px"><img src="'+img+'" alt=""></div>';
-      }
-      return '<div class="avatar" style="width:'+s+'px;height:'+s+'px;border-radius:'+r+'px;font-size:'+fs+'px;background:'+avatarColor(name)+'">'+initial(name)+'</div>';
-    }
-
-    function menuImgHtml(menu, size) {
-      const s = size || 56;
-      if (menu.img) {
-        return '<img class="menu-img" style="width:'+s+'px;height:'+s+'px" src="'+menu.img+'" alt="">';
-      }
-      return '<div class="menu-img-placeholder" style="width:'+s+'px;height:'+s+'px">🍽️</div>';
-    }
-
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 2600);
-    }
+    // =========================================================
 
     function showScreen(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -1023,20 +1052,9 @@
     function previewImage(input, type) {
       const file = input.files[0];
       if (!file) return;
-      if (file.size > 500000) {
-        // Compress if large
-        compressImage(file, 400, 0.7, function(dataUrl) {
-          applyPreview(dataUrl, type);
-        });
-      } else {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-          applyPreview(e.target.result, type);
-        };
-        reader.readAsDataURL(file);
-      }
+      if (file.size > 500000) compressImage(file, 400, 0.7, (dataUrl) => applyPreview(dataUrl, type));
+      else { const reader = new FileReader(); reader.onload = (e) => applyPreview(e.target.result, type); reader.readAsDataURL(file); }
     }
-
     function compressImage(file, maxW, quality, cb) {
       const reader = new FileReader();
       reader.onload = function(e) {
@@ -1053,35 +1071,25 @@
       };
       reader.readAsDataURL(file);
     }
-
     function applyPreview(dataUrl, type) {
       if (type === 'seller') {
         state.tempSellerImg = dataUrl;
-        const area = document.getElementById('seller-img-area');
-        area.innerHTML = '<img src="'+dataUrl+'" alt=""><button type="button" class="remove-img" onclick="event.stopPropagation();clearSellerImg()"><i class="fas fa-times"></i></button><input type="file" id="seller-img-input" accept="image/*" class="hidden" onchange="previewImage(this, \'seller\')">';
+        document.getElementById('seller-img-area').innerHTML = `<img src="${dataUrl}" alt=""><button type="button" class="remove-img" onclick="event.stopPropagation();clearSellerImg()"><i class="fas fa-times"></i></button><input type="file" id="seller-img-input" accept="image/*" class="hidden" onchange="previewImage(this, 'seller')">`;
       } else {
         state.tempMenuImg = dataUrl;
-        const area = document.getElementById('menu-img-area');
-        area.innerHTML = '<img src="'+dataUrl+'" alt=""><button type="button" class="remove-img" onclick="event.stopPropagation();clearMenuImg()"><i class="fas fa-times"></i></button><input type="file" id="menu-img-input" accept="image/*" class="hidden" onchange="previewImage(this, \'menu\')">';
+        document.getElementById('menu-img-area').innerHTML = `<img src="${dataUrl}" alt=""><button type="button" class="remove-img" onclick="event.stopPropagation();clearMenuImg()"><i class="fas fa-times"></i></button><input type="file" id="menu-img-input" accept="image/*" class="hidden" onchange="previewImage(this, 'menu')">`;
       }
     }
-
     function clearSellerImg() {
       state.tempSellerImg = null;
-      document.getElementById('seller-img-area').innerHTML = '<i class="fas fa-camera text-brand-400 text-lg" id="seller-img-icon"></i><span class="text-[10px] text-slate-400 mt-1" id="seller-img-label">Foto</span><input type="file" id="seller-img-input" accept="image/*" class="hidden" onchange="previewImage(this, \'seller\')">';
+      document.getElementById('seller-img-area').innerHTML = `<i class="fas fa-camera text-brand-400 text-lg" id="seller-img-icon"></i><span class="text-[10px] text-slate-400 mt-1" id="seller-img-label">Foto</span><input type="file" id="seller-img-input" accept="image/*" class="hidden" onchange="previewImage(this, 'seller')">`;
     }
     function clearMenuImg() {
       state.tempMenuImg = null;
-      document.getElementById('menu-img-area').innerHTML = '<i class="fas fa-camera text-brand-400 text-lg" id="menu-img-icon"></i><span class="text-[10px] text-slate-400 mt-1" id="menu-img-label">Foto</span><input type="file" id="menu-img-input" accept="image/*" class="hidden" onchange="previewImage(this, \'menu\')">';
+      document.getElementById('menu-img-area').innerHTML = `<i class="fas fa-camera text-brand-400 text-lg" id="menu-img-icon"></i><span class="text-[10px] text-slate-400 mt-1" id="menu-img-label">Foto</span><input type="file" id="menu-img-input" accept="image/*" class="hidden" onchange="previewImage(this, 'menu')">`;
     }
-
     function setImgPreview(type, img) {
-      if (img) {
-        applyPreview(img, type);
-      } else {
-        if (type === 'seller') clearSellerImg();
-        else clearMenuImg();
-      }
+      if (img) applyPreview(img, type); else { if (type === 'seller') clearSellerImg(); else clearMenuImg(); }
     }
 
     // ===== ROLE =====
@@ -1097,20 +1105,17 @@
         setTimeout(() => document.getElementById('login-ob-pin').focus(), 300);
       }
     }
-
     function loginEmp() {
       const name = document.getElementById('login-emp-name').value.trim();
       if (!name) { showToast('Nama Anda harus diisi ya'); return; }
-      state.empName = name;
-      state.cart = {};
+      state.empName = name; state.cart = {};
       document.getElementById('emp-greeting').textContent = 'Halo, ' + name + '!';
       showScreen('screen-emp-sellers');
     }
-
     function loginOB() {
       const pin = document.getElementById('login-ob-pin').value;
       if (pin === '123456') {
-        document.getElementById('login-ob-pin').value = ''; // Reset form PIN
+        document.getElementById('login-ob-pin').value = '';
         const d = new Date();
         document.getElementById('ob-date').textContent = d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
         showScreen('screen-ob-dashboard');
@@ -1138,14 +1143,10 @@
           </div>
           <i class="fas fa-chevron-right text-slate-300 text-xs"></i>
         </div>
-      `).join('') + `
-        <button onclick="showScreen('screen-emp-orders')" class="btn btn-outline w-full mt-2 text-sm">
-          <i class="fas fa-receipt text-xs"></i> Lihat Pesanan Saya
-        </button>
-      `;
+      `).join('') + `<button onclick="refreshData()" class="btn btn-outline w-full mt-2 text-sm"><i class="fas fa-sync-alt text-xs"></i> Segarkan Data Menu</button>`
+      + `<button onclick="showScreen('screen-emp-orders')" class="btn btn-outline w-full mt-2 text-sm"><i class="fas fa-receipt text-xs"></i> Lihat Pesanan Saya</button>`;
       updateCartBadge();
     }
-
     function openSellerMenu(id) {
       state.currentSellerId = id;
       const s = state.sellers.find(x=>x.id===id);
@@ -1175,10 +1176,7 @@
                 <p class="text-brand-600 font-bold text-sm mt-0.5">${formatRp(m.price)}</p>
               </div>
               <div class="flex items-center gap-2">
-                ${qty>0?`
-                  <button class="qty-btn qty-minus" onclick="event.stopPropagation();changeQty('${m.id}',-1)">−</button>
-                  <span class="font-extrabold text-sm w-5 text-center text-slate-800">${qty}</span>
-                `:''}
+                ${qty>0?`<button class="qty-btn qty-minus" onclick="event.stopPropagation();changeQty('${m.id}',-1)">−</button><span class="font-extrabold text-sm w-5 text-center text-slate-800">${qty}</span>`:''}
                 <button class="qty-btn qty-plus" onclick="event.stopPropagation();changeQty('${m.id}',1)">+</button>
               </div>
             </div>
@@ -1187,55 +1185,39 @@
       }).join('');
       updateCartBadge();
     }
-
     function changeQty(menuId, delta) {
-      const cur = state.cart[menuId]||0;
-      const next = Math.max(0, cur+delta);
-      if (next===0) delete state.cart[menuId];
-      else state.cart[menuId] = next;
+      const cur = state.cart[menuId]||0; const next = Math.max(0, cur+delta);
+      if (next===0) delete state.cart[menuId]; else state.cart[menuId] = next;
       const active = document.querySelector('.screen.active').id;
       if (active==='screen-emp-menu') renderEmpMenu();
       if (active==='screen-emp-cart') renderCart();
       updateCartBadge();
     }
-
     function updateCartBadge() {
       const total = Object.values(state.cart).reduce((a,b)=>a+b,0);
       ['cart-badge','cart-badge-2'].forEach(id=>{
         const el = document.getElementById(id);
-        if (total>0) { el.textContent=total; el.classList.remove('hidden'); }
-        else el.classList.add('hidden');
+        if (total>0) { el.textContent=total; el.classList.remove('hidden'); } else el.classList.add('hidden');
       });
-      const fab1 = document.getElementById('emp-cart-fab');
-      const fab2 = document.getElementById('menu-cart-fab');
+      const fab1 = document.getElementById('emp-cart-fab'); const fab2 = document.getElementById('menu-cart-fab');
       if (total>0) {
-        fab1.classList.remove('hidden');
-        fab2.classList.remove('hidden');
-        document.getElementById('fab-count').textContent = total;
-        document.getElementById('fab-count-2').textContent = total;
-      } else {
-        fab1.classList.add('hidden');
-        fab2.classList.add('hidden');
-      }
+        fab1.classList.remove('hidden'); fab2.classList.remove('hidden');
+        document.getElementById('fab-count').textContent = total; document.getElementById('fab-count-2').textContent = total;
+      } else { fab1.classList.add('hidden'); fab2.classList.add('hidden'); }
     }
-
     function showCart() {
       if (!Object.keys(state.cart).length) { showToast('Keranjang masih kosong'); return; }
       showScreen('screen-emp-cart');
     }
-
     function renderCart() {
       const list = document.getElementById('cart-list');
-      let totalItems = 0;
-      const bySeller = {};
+      let totalItems = 0; const bySeller = {};
       Object.entries(state.cart).forEach(([menuId,qty])=>{
         for (const s of state.sellers) {
           const menu = s.menus.find(m=>m.id===menuId);
           if (menu) {
             if (!bySeller[s.id]) bySeller[s.id]={seller:s,items:[]};
-            bySeller[s.id].items.push({menu,qty});
-            totalItems += qty;
-            break;
+            bySeller[s.id].items.push({menu,qty}); totalItems += qty; break;
           }
         }
       });
@@ -1255,7 +1237,7 @@
                 ${menuImgHtml(menu, 40)}
                 <div class="min-w-0">
                   <p class="font-semibold text-slate-800 text-sm">${menu.name}</p>
-                  <p class="text-[11px] text-slate-400 mt-0.5">${formatRp(menu.price)} × ${qty} = <span class="text-brand-600 font-semibold">${formatRp(menu.price*qty)}</span></p>
+                  <p class="text-[11px] text-slate-400 mt-0.5">${formatRp(menu.price)} ×${qty} = <span class="text-brand-600 font-semibold">${formatRp(menu.price*qty)}</span></p>
                 </div>
               </div>
               <div class="flex items-center gap-1.5">
@@ -1270,31 +1252,20 @@
       document.getElementById('cart-total-items').textContent = totalItems+' item';
     }
 
-    function submitOrder() {
+    async function submitOrder() {
       if (!Object.keys(state.cart).length) { showToast('Keranjang kosong'); return; }
       const note = document.getElementById('order-note').value.trim();
       const items = [];
       Object.entries(state.cart).forEach(([menuId,qty])=>{
         for (const s of state.sellers) {
           const menu = s.menus.find(m=>m.id===menuId);
-          if (menu) {
-            items.push({menuId,menuName:menu.name,price:menu.price,qty,sellerId:s.id,sellerName:s.name});
-            break;
-          }
+          if (menu) { items.push({menuId,menuName:menu.name,price:menu.price,qty,sellerId:s.id,sellerName:s.name}); break; }
         }
       });
-      state.orders.push({
-        id: uid(),
-        empName: state.empName,
-        items,
-        note,
-        time: new Date().toISOString(),
-        status: 'diterima'
-      });
-      saveState();
-      state.cart = {};
-      document.getElementById('order-note').value = '';
-      showToast('Pesanan berhasil dikirim! ✅');
+      state.orders.push({ id: uid(), empName: state.empName, items, note, time: new Date().toISOString(), status: 'diterima' });
+      await saveState();
+      state.cart = {}; document.getElementById('order-note').value = '';
+      showToast('Pesanan berhasil dikirim ke OB! ✅');
       setTimeout(()=>showScreen('screen-emp-sellers'), 900);
     }
 
@@ -1302,16 +1273,12 @@
     function renderEmpOrders() {
       const list = document.getElementById('emp-orders-list');
       const today = new Date().toDateString();
-      const myOrders = state.orders.filter(o =>
-        o.empName === state.empName && new Date(o.time).toDateString() === today
-      ).reverse();
-
+      const myOrders = state.orders.filter(o => o.empName === state.empName && new Date(o.time).toDateString() === today).reverse();
       if (!myOrders.length) {
         list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-receipt"></i></div><p class="font-medium text-slate-500">Belum ada pesanan hari ini</p></div>';
         return;
       }
-
-      list.innerHTML = myOrders.map((o,i) => {
+      list.innerHTML = `<button onclick="refreshData()" class="btn btn-outline w-full mb-4 text-sm"><i class="fas fa-sync-alt text-xs"></i> Segarkan Status</button>` + myOrders.map((o,i) => {
         const time = new Date(o.time).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
         return `
           <div class="card p-4 mb-3" style="animation:slideUp 0.35s ease ${i*0.04}s both">
@@ -1328,8 +1295,6 @@
               `).join('')}
             </div>
             ${o.note ? '<p class="text-[11px] text-amber-600 mt-2"><i class="fas fa-sticky-note"></i> '+o.note+'</p>' : ''}
-            ${o.status === 'siap' ? '<p class="text-xs text-amber-600 font-semibold mt-2"><i class="fas fa-bell"></i> Pesanan siap diambil!</p>' : ''}
-            ${o.status === 'selesai' ? '<p class="text-xs text-emerald-600 font-semibold mt-2"><i class="fas fa-check-circle"></i> Pesanan selesai</p>' : ''}
           </div>
         `;
       }).join('');
@@ -1339,61 +1304,44 @@
     function setOrderFilter(filter, el) {
       state.orderFilter = filter;
       document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-      el.classList.add('active');
-      renderOBDashboard();
+      el.classList.add('active'); renderOBDashboard();
     }
-
     function renderOBDashboard() {
       const today = new Date().toDateString();
       const todayOrders = state.orders.filter(o => new Date(o.time).toDateString() === today);
-      let totalItems = 0;
-      let activeCount = 0;
-      todayOrders.forEach(o => {
-        o.items.forEach(i => { totalItems += i.qty; });
-        if (o.status !== 'selesai') activeCount++;
-      });
+      let totalItems = 0; let activeCount = 0;
+      todayOrders.forEach(o => { o.items.forEach(i => { totalItems += i.qty; }); if (o.status !== 'selesai') activeCount++; });
       document.getElementById('stat-orders').textContent = todayOrders.length;
       document.getElementById('stat-items').textContent = totalItems;
       document.getElementById('stat-pending').textContent = activeCount;
 
       let filtered = todayOrders;
-      if (state.orderFilter !== 'all') {
-        filtered = todayOrders.filter(o => o.status === state.orderFilter);
-      }
+      if (state.orderFilter !== 'all') filtered = todayOrders.filter(o => o.status === state.orderFilter);
 
       const list = document.getElementById('ob-orders-list');
       if (!filtered.length) {
-        list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-clipboard-list"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan</p><p class="text-xs mt-1">'+(state.orderFilter==='all'?'Pesanan pegawai akan muncul di sini':'Tidak ada pesanan dengan status ini')+'</p></div>';
+        list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-clipboard-list"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan</p></div>';
         return;
       }
-
-      const sorted = [...filtered].reverse();
-      list.innerHTML = sorted.map((o,i) => {
+      list.innerHTML = [...filtered].reverse().map((o,i) => {
         const time = new Date(o.time).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
         return `
           <div class="card p-4 mb-3" style="animation:slideUp 0.35s ease ${i*0.04}s both">
             <div class="flex items-start justify-between mb-2.5">
               <div class="flex items-center gap-2.5">
                 ${avatarHtml(o.empName, null, 36)}
-                <div>
-                  <h4 class="font-bold text-slate-800 text-sm">${o.empName}</h4>
-                  <p class="text-[11px] text-slate-400">${time}</p>
-                </div>
+                <div><h4 class="font-bold text-slate-800 text-sm">${o.empName}</h4><p class="text-[11px] text-slate-400">${time}</p></div>
               </div>
               <div class="flex items-center gap-1.5">
                 <span class="status-badge ${STATUS_CLASS[o.status]}">${STATUS_LABEL[o.status]}</span>
-                <button onclick="deleteOrder('${o.id}')" class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400">
-                  <i class="fas fa-trash-alt text-[10px]"></i>
-                </button>
+                <button onclick="deleteOrder('${o.id}')" class="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400"><i class="fas fa-trash-alt text-[10px]"></i></button>
               </div>
             </div>
             <div class="space-y-1.5">
               ${o.items.map(item => `
                 <div class="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2">
                   <div class="flex items-center gap-2 min-w-0">
-                    <span class="text-xs text-slate-400 truncate">${item.sellerName}</span>
-                    <span class="text-slate-300">·</span>
-                    <span class="text-sm font-medium text-slate-700 truncate">${item.menuName}</span>
+                    <span class="text-xs text-slate-400 truncate">${item.sellerName}</span><span class="text-slate-300">·</span><span class="text-sm font-medium text-slate-700 truncate">${item.menuName}</span>
                   </div>
                   <span class="badge bg-brand-50 text-brand-600 flex-shrink-0">×${item.qty}</span>
                 </div>
@@ -1401,60 +1349,29 @@
             </div>
             ${o.note ? '<p class="text-[11px] text-amber-600 mt-2 flex items-center gap-1.5"><i class="fas fa-sticky-note"></i> '+o.note+'</p>' : ''}
             <div class="status-actions">
-              ${o.status === 'diterima' ? `
-                <button onclick="updateOrderStatus('${o.id}','siap')" class="btn btn-warning btn-sm">
-                  <i class="fas fa-bell text-[10px]"></i> Siap Diambil
-                </button>
-                <button onclick="updateOrderStatus('${o.id}','selesai')" class="btn btn-success btn-sm">
-                  <i class="fas fa-check text-[10px]"></i> Selesai
-                </button>
-              ` : ''}
-              ${o.status === 'siap' ? `
-                <button onclick="updateOrderStatus('${o.id}','selesai')" class="btn btn-success btn-sm">
-                  <i class="fas fa-check text-[10px]"></i> Tandai Selesai
-                </button>
-                <button onclick="updateOrderStatus('${o.id}','diterima')" class="btn btn-outline btn-sm">
-                  <i class="fas fa-undo text-[10px]"></i> Kembali
-                </button>
-              ` : ''}
-              ${o.status === 'selesai' ? `
-                <button onclick="updateOrderStatus('${o.id}','siap')" class="btn btn-outline btn-sm">
-                  <i class="fas fa-undo text-[10px]"></i> Buka Kembali
-                </button>
-              ` : ''}
+              ${o.status === 'diterima' ? `<button onclick="updateOrderStatus('${o.id}','siap')" class="btn btn-warning btn-sm"><i class="fas fa-bell text-[10px]"></i> Siap</button><button onclick="updateOrderStatus('${o.id}','selesai')" class="btn btn-success btn-sm"><i class="fas fa-check text-[10px]"></i> Selesai</button>` : ''}
+              ${o.status === 'siap' ? `<button onclick="updateOrderStatus('${o.id}','selesai')" class="btn btn-success btn-sm"><i class="fas fa-check text-[10px]"></i> Tandai Selesai</button><button onclick="updateOrderStatus('${o.id}','diterima')" class="btn btn-outline btn-sm"><i class="fas fa-undo text-[10px]"></i> Kembali</button>` : ''}
+              ${o.status === 'selesai' ? `<button onclick="updateOrderStatus('${o.id}','siap')" class="btn btn-outline btn-sm"><i class="fas fa-undo text-[10px]"></i> Buka Kembali</button>` : ''}
             </div>
           </div>
         `;
       }).join('');
     }
-
-    function updateOrderStatus(id, status) {
-      const o = state.orders.find(x => x.id === id);
-      if (!o) return;
-      o.status = status;
-      saveState();
-      renderOBDashboard();
-      showToast('Status: ' + STATUS_LABEL[status]);
+    async function updateOrderStatus(id, status) {
+      const o = state.orders.find(x => x.id === id); if (!o) return;
+      o.status = status; await saveState();
+      renderOBDashboard(); showToast('Status: ' + STATUS_LABEL[status]);
     }
-
-    function deleteOrder(id) {
+    async function deleteOrder(id) {
       if (!confirm('Hapus pesanan ini?')) return;
       state.orders = state.orders.filter(o => o.id !== id);
-      saveState();
-      renderOBDashboard();
-      showToast('Pesanan dihapus');
+      await saveState(); renderOBDashboard(); showToast('Pesanan dihapus');
     }
-
-    function clearDoneOrders() {
+    async function clearDoneOrders() {
       if (!confirm('Hapus semua pesanan yang sudah selesai hari ini?')) return;
       const today = new Date().toDateString();
-      state.orders = state.orders.filter(o => {
-        if (new Date(o.time).toDateString() !== today) return true;
-        return o.status !== 'selesai';
-      });
-      saveState();
-      renderOBDashboard();
-      showToast('Pesanan selesai dibersihkan');
+      state.orders = state.orders.filter(o => { if (new Date(o.time).toDateString() !== today) return true; return o.status !== 'selesai'; });
+      await saveState(); renderOBDashboard(); showToast('Pesanan selesai dibersihkan');
     }
 
     // ===== OB SELLERS =====
@@ -1473,93 +1390,56 @@
               <div class="flex flex-wrap items-center gap-1.5 mt-1">
                 <span class="chip bg-emerald-50 text-emerald-600"><i class="fas fa-utensils text-[9px]"></i> ${s.menus.length} menu</span>
                 ${s.wa ? '<span class="chip bg-green-50 text-green-600"><i class="fab fa-whatsapp text-[9px]"></i> WA</span>' : '<span class="chip bg-rose-50 text-rose-500">No WA</span>'}
-                ${s.img ? '<span class="chip bg-brand-50 text-brand-600"><i class="fas fa-image text-[9px]"></i> Foto</span>' : ''}
               </div>
-              ${s.note ? '<p class="text-[11px] text-slate-400 mt-1.5">'+s.note+'</p>' : ''}
             </div>
             <div class="flex gap-1">
               <button onclick="editSeller('${s.id}')" class="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400"><i class="fas fa-pen text-[10px]"></i></button>
               <button onclick="deleteSeller('${s.id}')" class="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400"><i class="fas fa-trash-alt text-[10px]"></i></button>
             </div>
           </div>
-          <button onclick="openOBMenu('${s.id}')" class="btn btn-outline w-full mt-3 text-sm py-2.5">
-            <i class="fas fa-utensils text-xs"></i> Kelola Menu
-          </button>
+          <button onclick="openOBMenu('${s.id}')" class="btn btn-outline w-full mt-3 text-sm py-2.5"><i class="fas fa-utensils text-xs"></i> Kelola Menu</button>
         </div>
       `).join('');
     }
-
     function showAddSellerModal() {
-      state.editingSellerId = null;
-      state.tempSellerImg = null;
+      state.editingSellerId = null; state.tempSellerImg = null;
       document.getElementById('modal-seller-title').textContent = 'Tambah Penjual';
-      document.getElementById('seller-name').value = '';
-      document.getElementById('seller-wa').value = '';
-      document.getElementById('seller-note').value = '';
-      clearSellerImg();
-      openModal('modal-seller');
+      document.getElementById('seller-name').value = ''; document.getElementById('seller-wa').value = ''; document.getElementById('seller-note').value = '';
+      clearSellerImg(); openModal('modal-seller');
     }
-
     function editSeller(id) {
-      const s = state.sellers.find(x => x.id === id);
-      if (!s) return;
-      state.editingSellerId = id;
-      state.tempSellerImg = s.img || null;
+      const s = state.sellers.find(x => x.id === id); if (!s) return;
+      state.editingSellerId = id; state.tempSellerImg = s.img || null;
       document.getElementById('modal-seller-title').textContent = 'Edit Penjual';
-      document.getElementById('seller-name').value = s.name;
-      document.getElementById('seller-wa').value = s.wa || '';
-      document.getElementById('seller-note').value = s.note || '';
-      setImgPreview('seller', s.img);
-      openModal('modal-seller');
+      document.getElementById('seller-name').value = s.name; document.getElementById('seller-wa').value = s.wa || ''; document.getElementById('seller-note').value = s.note || '';
+      setImgPreview('seller', s.img); openModal('modal-seller');
     }
-
-    function saveSeller() {
+    async function saveSeller() {
       const name = document.getElementById('seller-name').value.trim();
-      let wa = document.getElementById('seller-wa').value.trim().replace(/\D/g, '');
-      if (wa.startsWith('0')) { wa = '62' + wa.substring(1); }
+      let wa = document.getElementById('seller-wa').value.trim().replace(/\D/g, ''); if (wa.startsWith('0')) wa = '62' + wa.substring(1);
       const note = document.getElementById('seller-note').value.trim();
       if (!name) { showToast('Nama penjual wajib diisi'); return; }
       if (state.editingSellerId) {
         const s = state.sellers.find(x => x.id === state.editingSellerId);
-        if (s) {
-          s.name = name;
-          s.wa = wa;
-          s.note = note;
-          s.img = state.tempSellerImg;
-        }
-        showToast('Penjual diperbarui ✓');
+        if (s) { s.name = name; s.wa = wa; s.note = note; s.img = state.tempSellerImg; }
       } else {
-        state.sellers.push({
-          id: uid(), name, wa, note,
-          img: state.tempSellerImg,
-          menus: []
-        });
-        showToast('Penjual ditambahkan ✓');
+        state.sellers.push({ id: uid(), name, wa, note, img: state.tempSellerImg, menus: [] });
       }
-      saveState();
-      closeModal('modal-seller');
-      renderOBSellers();
+      await saveState(); closeModal('modal-seller'); renderOBSellers(); showToast('Tersimpan ✓');
     }
-
-    function deleteSeller(id) {
+    async function deleteSeller(id) {
       if (!confirm('Hapus penjual beserta semua menunya?')) return;
       state.sellers = state.sellers.filter(s => s.id !== id);
-      saveState();
-      renderOBSellers();
-      showToast('Penjual dihapus');
+      await saveState(); renderOBSellers(); showToast('Penjual dihapus');
     }
 
     // ===== OB MENU =====
     function openOBMenu(id) {
-      state.currentSellerId = id;
-      const s = state.sellers.find(x => x.id === id);
-      document.getElementById('ob-menu-seller-name').textContent = s.name;
-      showScreen('screen-ob-menu');
+      state.currentSellerId = id; const s = state.sellers.find(x => x.id === id);
+      document.getElementById('ob-menu-seller-name').textContent = s.name; showScreen('screen-ob-menu');
     }
-
     function renderOBMenu() {
-      const seller = state.sellers.find(s => s.id === state.currentSellerId);
-      if (!seller) return;
+      const seller = state.sellers.find(s => s.id === state.currentSellerId); if (!seller) return;
       const list = document.getElementById('ob-menu-list');
       if (!seller.menus.length) {
         list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-utensils"></i></div><p class="font-medium text-slate-500">Belum ada menu</p><button onclick="showAddMenuModal()" class="btn btn-primary mt-4 text-sm"><i class="fas fa-plus"></i> Tambah Menu</button></div>';
@@ -1569,8 +1449,7 @@
         <div class="card p-4 mb-3 flex items-center gap-3" style="animation:slideUp 0.3s ease ${i*0.04}s both">
           ${menuImgHtml(m, 48)}
           <div class="flex-1 min-w-0">
-            <h3 class="font-bold text-slate-800 text-sm">${m.name}</h3>
-            <p class="text-brand-600 font-bold text-sm">${formatRp(m.price)}</p>
+            <h3 class="font-bold text-slate-800 text-sm">${m.name}</h3><p class="text-brand-600 font-bold text-sm">${formatRp(m.price)}</p>
             ${m.desc ? '<p class="text-[11px] text-slate-400 mt-0.5 truncate">'+m.desc+'</p>' : ''}
           </div>
           <div class="flex gap-1">
@@ -1580,223 +1459,100 @@
         </div>
       `).join('');
     }
-
     function showAddMenuModal() {
-      state.editingMenuId = null;
-      state.tempMenuImg = null;
+      state.editingMenuId = null; state.tempMenuImg = null;
       document.getElementById('modal-menu-title').textContent = 'Tambah Menu';
-      document.getElementById('menu-name').value = '';
-      document.getElementById('menu-price').value = '';
-      document.getElementById('menu-desc').value = '';
-      clearMenuImg();
-      openModal('modal-menu');
+      document.getElementById('menu-name').value = ''; document.getElementById('menu-price').value = ''; document.getElementById('menu-desc').value = '';
+      clearMenuImg(); openModal('modal-menu');
     }
-
     function editMenu(id) {
-      const seller = state.sellers.find(s => s.id === state.currentSellerId);
-      const m = seller && seller.menus.find(x => x.id === id);
-      if (!m) return;
-      state.editingMenuId = id;
-      state.tempMenuImg = m.img || null;
+      const seller = state.sellers.find(s => s.id === state.currentSellerId); const m = seller && seller.menus.find(x => x.id === id); if (!m) return;
+      state.editingMenuId = id; state.tempMenuImg = m.img || null;
       document.getElementById('modal-menu-title').textContent = 'Edit Menu';
-      document.getElementById('menu-name').value = m.name;
-      document.getElementById('menu-price').value = m.price;
-      document.getElementById('menu-desc').value = m.desc || '';
-      setImgPreview('menu', m.img);
-      openModal('modal-menu');
+      document.getElementById('menu-name').value = m.name; document.getElementById('menu-price').value = m.price; document.getElementById('menu-desc').value = m.desc || '';
+      setImgPreview('menu', m.img); openModal('modal-menu');
     }
-
-    function saveMenu() {
+    async function saveMenu() {
       const name = document.getElementById('menu-name').value.trim();
       const price = parseInt(document.getElementById('menu-price').value) || 0;
       const desc = document.getElementById('menu-desc').value.trim();
       if (!name) { showToast('Nama menu wajib diisi'); return; }
-      const seller = state.sellers.find(s => s.id === state.currentSellerId);
-      if (!seller) return;
+      const seller = state.sellers.find(s => s.id === state.currentSellerId); if (!seller) return;
       if (state.editingMenuId) {
         const m = seller.menus.find(x => x.id === state.editingMenuId);
-        if (m) {
-          m.name = name;
-          m.price = price;
-          m.desc = desc;
-          m.img = state.tempMenuImg;
-        }
-        showToast('Menu diperbarui ✓');
+        if (m) { m.name = name; m.price = price; m.desc = desc; m.img = state.tempMenuImg; }
       } else {
-        seller.menus.push({
-          id: uid(), name, price, desc,
-          img: state.tempMenuImg
-        });
-        showToast('Menu ditambahkan ✓');
+        seller.menus.push({ id: uid(), name, price, desc, img: state.tempMenuImg });
       }
-      saveState();
-      closeModal('modal-menu');
-      renderOBMenu();
+      await saveState(); closeModal('modal-menu'); renderOBMenu(); showToast('Tersimpan ✓');
     }
-
-    function deleteMenu(id) {
+    async function deleteMenu(id) {
       if (!confirm('Hapus menu ini?')) return;
       const seller = state.sellers.find(s => s.id === state.currentSellerId);
-      if (seller) {
-        seller.menus = seller.menus.filter(m => m.id !== id);
-        saveState();
-        renderOBMenu();
-        showToast('Menu dihapus');
-      }
+      if (seller) { seller.menus = seller.menus.filter(m => m.id !== id); await saveState(); renderOBMenu(); showToast('Menu dihapus'); }
     }
 
-    // ===== OB SUMMARY (only active orders) =====
+    // ===== OB SUMMARY & WA =====
     function renderOBSummary() {
       const today = new Date().toDateString();
-      const todayOrders = state.orders.filter(o =>
-        new Date(o.time).toDateString() === today && o.status !== 'selesai'
-      );
+      const todayOrders = state.orders.filter(o => new Date(o.time).toDateString() === today && o.status !== 'selesai');
       const bySeller = {};
       todayOrders.forEach(o => {
         o.items.forEach(item => {
-          if (!bySeller[item.sellerId]) {
-            bySeller[item.sellerId] = {
-              sellerName: item.sellerName,
-              sellerId: item.sellerId,
-              menus: {},
-              employees: []
-            };
-          }
+          if (!bySeller[item.sellerId]) bySeller[item.sellerId] = { sellerName: item.sellerName, sellerId: item.sellerId, menus: {}, employees: [] };
           const s = bySeller[item.sellerId];
           if (!s.menus[item.menuId]) s.menus[item.menuId] = { name: item.menuName, qty: 0, price: item.price };
           s.menus[item.menuId].qty += item.qty;
           s.employees.push({ name: o.empName, menuId: item.menuId, menuName: item.menuName, qty: item.qty, note: o.note, status: o.status });
         });
       });
-
-      const list = document.getElementById('ob-summary-list');
-      const ids = Object.keys(bySeller);
-      if (!ids.length) {
-        list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-chart-pie"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan aktif</p></div>';
-        return;
-      }
-
+      const list = document.getElementById('ob-summary-list'); const ids = Object.keys(bySeller);
+      if (!ids.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="fas fa-chart-pie"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan aktif</p></div>'; return; }
       list.innerHTML = ids.map((sid, i) => {
-        const s = bySeller[sid];
-        const seller = state.sellers.find(x => x.id === sid);
-        const menus = Object.values(s.menus);
-        const totalQty = menus.reduce((a, m) => a + m.qty, 0);
+        const s = bySeller[sid]; const seller = state.sellers.find(x => x.id === sid); const menus = Object.values(s.menus); const totalQty = menus.reduce((a, m) => a + m.qty, 0);
         return `
           <div class="card p-4 mb-4" style="animation:slideUp 0.35s ease ${i*0.05}s both">
             <div class="flex items-center justify-between mb-3">
               <div class="flex items-center gap-2.5">
                 ${avatarHtml(s.sellerName, seller && seller.img, 40)}
-                <div>
-                  <h3 class="font-bold text-slate-800 text-sm">${s.sellerName}</h3>
-                  <p class="text-[11px] text-slate-400">${totalQty} item aktif</p>
-                </div>
+                <div><h3 class="font-bold text-slate-800 text-sm">${s.sellerName}</h3><p class="text-[11px] text-slate-400">${totalQty} item aktif</p></div>
               </div>
               ${seller && seller.wa ? '<button onclick="window.open(\'' + generateWALink(seller, menus, s.employees) + '\', \'_blank\')" class="btn btn-success text-xs py-2 px-3.5" style="border-radius:12px"><i class="fab fa-whatsapp"></i> WA</button>' : ''}
             </div>
-            <div class="space-y-1.5">
-              ${menus.map(m => `
-                <div class="flex justify-between items-center bg-slate-50 rounded-xl px-3.5 py-2.5">
-                  <span class="text-sm font-medium text-slate-700">${m.name}</span>
-                  <span class="font-extrabold text-brand-600">×${m.qty}</span>
-                </div>
-              `).join('')}
-            </div>
-            <details class="mt-3 group">
-              <summary class="text-[11px] text-slate-400 cursor-pointer font-semibold flex items-center gap-1 select-none">
-                <i class="fas fa-chevron-right text-[8px] transition-transform group-open:rotate-90"></i> Detail pemesan
-              </summary>
-              <div class="mt-2 space-y-1 pl-3 border-l-2 border-brand-100">
-                ${s.employees.map(e => '<p class="text-[11px] text-slate-500">'+e.name+': <span class="font-medium text-slate-700">'+e.menuName+' ×'+e.qty+'</span> <span class="status-badge '+STATUS_CLASS[e.status]+'" style="font-size:9px;padding:2px 6px">'+STATUS_LABEL[e.status]+'</span>'+(e.note?' <span class="text-amber-500">('+e.note+')</span>':'')+'</p>').join('')}
-              </div>
-            </details>
+            <div class="space-y-1.5">${menus.map(m => `<div class="flex justify-between items-center bg-slate-50 rounded-xl px-3.5 py-2.5"><span class="text-sm font-medium text-slate-700">${m.name}</span><span class="font-extrabold text-brand-600">×${m.qty}</span></div>`).join('')}</div>
           </div>
         `;
       }).join('');
     }
-
-    // ===== WA =====
     function generateWAMessage(seller, menus, employees) {
       const today = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' });
-      let msg = 'Halo ' + seller.name + ' 👋\n\nPesanan untuk hari ' + today + ':\n\n';
-      menus.forEach(m => { msg += '• ' + m.name + ' × ' + m.qty + '\n'; });
-      msg += '\nTotal: ' + menus.reduce((a, m) => a + m.qty, 0) + ' item\n\nMohon disiapkan ya, terima kasih! 🙏';
-      if (employees && employees.length) {
-        msg += '\n\n--- Detail ---\n';
-        employees.forEach(e => {
-          msg += e.name + ': ' + e.menuName + ' ×' + e.qty;
-          if (e.note) msg += ' (' + e.note + ')';
-          msg += '\n';
-        });
-      }
+      let msg = `Halo ${seller.name} 👋\n\nPesanan untuk hari ${today}:\n\n`;
+      menus.forEach(m => { msg += `• ${m.name} × ${m.qty}\n`; });
+      msg += `\nTotal: ${menus.reduce((a, m) => a + m.qty, 0)} item\n\nMohon disiapkan ya, terima kasih! 🙏`;
       return msg;
     }
-
     function generateWALink(seller, menus, employees) {
-      const text = generateWAMessage(seller, menus, employees);
-      return 'https://wa.me/' + seller.wa + '?text=' + encodeURIComponent(text).replace(/'/g, "%27").replace(/"/g, "%22");
+      return 'https://wa.me/' + seller.wa + '?text=' + encodeURIComponent(generateWAMessage(seller, menus, employees)).replace(/'/g, "%27").replace(/"/g, "%22");
     }
-
     function showWAModal() {
       const today = new Date().toDateString();
-      const todayOrders = state.orders.filter(o =>
-        new Date(o.time).toDateString() === today && o.status !== 'selesai'
-      );
+      const todayOrders = state.orders.filter(o => new Date(o.time).toDateString() === today && o.status !== 'selesai');
       const bySeller = {};
-      todayOrders.forEach(o => {
-        o.items.forEach(item => {
-          if (!bySeller[item.sellerId]) {
-            bySeller[item.sellerId] = {
-              sellerName: item.sellerName,
-              sellerId: item.sellerId,
-              menus: {},
-              employees: []
-            };
-          }
-          const s = bySeller[item.sellerId];
-          if (!s.menus[item.menuId]) s.menus[item.menuId] = { name: item.menuName, qty: 0, price: item.price };
-          s.menus[item.menuId].qty += item.qty;
-          s.employees.push({ name: o.empName, menuId: item.menuId, menuName: item.menuName, qty: item.qty, note: o.note });
-        });
-      });
-
-      const list = document.getElementById('wa-list');
-      const ids = Object.keys(bySeller);
-      if (!ids.length) {
-        list.innerHTML = '<div class="empty-state py-8"><div class="empty-icon"><i class="fab fa-whatsapp"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan aktif</p></div>';
-        openModal('modal-wa');
-        return;
-      }
-
+      todayOrders.forEach(o => { o.items.forEach(item => { if (!bySeller[item.sellerId]) bySeller[item.sellerId] = { sellerName: item.sellerName, sellerId: item.sellerId, menus: {}, employees: [] }; const s = bySeller[item.sellerId]; if (!s.menus[item.menuId]) s.menus[item.menuId] = { name: item.menuName, qty: 0, price: item.price }; s.menus[item.menuId].qty += item.qty; s.employees.push({ name: o.empName, menuId: item.menuId, menuName: item.menuName, qty: item.qty, note: o.note }); }); });
+      const list = document.getElementById('wa-list'); const ids = Object.keys(bySeller);
+      if (!ids.length) { list.innerHTML = '<div class="empty-state py-8"><div class="empty-icon"><i class="fab fa-whatsapp"></i></div><p class="font-medium text-slate-500">Tidak ada pesanan aktif</p></div>'; openModal('modal-wa'); return; }
       list.innerHTML = ids.map(sid => {
-        const s = bySeller[sid];
-        const seller = state.sellers.find(x => x.id === sid);
-        const menus = Object.values(s.menus);
-        const totalQty = menus.reduce((a, m) => a + m.qty, 0);
-        const hasWA = seller && seller.wa;
-        let btnHtml;
-        if (hasWA) {
-          btnHtml = '<button onclick="window.open(\'' + generateWALink(seller, menus, s.employees) + '\', \'_blank\')" class="btn btn-success w-full text-sm"><i class="fab fa-whatsapp"></i> Kirim ke ' + seller.name + '</button>';
-        } else {
-          btnHtml = '<button onclick="editSeller(\'' + sid + '\');closeModal(\'modal-wa\')" class="btn btn-outline w-full text-sm"><i class="fas fa-pen text-xs"></i> Isi No. WA dulu</button>';
-        }
-        return '<div class="card p-4 border border-slate-100">' +
-          '<div class="flex items-center gap-3 mb-3">' +
-            avatarHtml(s.sellerName, seller && seller.img, 40) +
-            '<div class="flex-1">' +
-              '<h4 class="font-bold text-slate-800 text-sm">' + s.sellerName + '</h4>' +
-              '<p class="text-[11px] text-slate-400">' + totalQty + ' item · ' + (hasWA ? seller.wa : 'No WA belum diisi') + '</p>' +
-            '</div>' +
-          '</div>' +
-          '<div class="text-[11px] text-slate-500 mb-3 bg-slate-50 rounded-xl p-2.5 leading-relaxed">' +
-            menus.map(m => m.name + ' ×' + m.qty).join(' · ') +
-          '</div>' +
-          btnHtml +
-        '</div>';
+        const s = bySeller[sid]; const seller = state.sellers.find(x => x.id === sid); const menus = Object.values(s.menus); const totalQty = menus.reduce((a, m) => a + m.qty, 0); const hasWA = seller && seller.wa;
+        let btnHtml = hasWA ? `<button onclick="window.open('${generateWALink(seller, menus, s.employees)}', '_blank')" class="btn btn-success w-full text-sm"><i class="fab fa-whatsapp"></i> Kirim ke ${seller.name}</button>` : `<button onclick="editSeller('${sid}');closeModal('modal-wa')" class="btn btn-outline w-full text-sm"><i class="fas fa-pen text-xs"></i> Isi No. WA dulu</button>`;
+        return `<div class="card p-4 border border-slate-100"><div class="flex items-center gap-3 mb-3">${avatarHtml(s.sellerName, seller && seller.img, 40)}<div class="flex-1"><h4 class="font-bold text-slate-800 text-sm">${s.sellerName}</h4><p class="text-[11px] text-slate-400">${totalQty} item · ${hasWA ? seller.wa : 'No WA belum diisi'}</p></div></div><div class="text-[11px] text-slate-500 mb-3 bg-slate-50 rounded-xl p-2.5 leading-relaxed">${menus.map(m => m.name + ' ×' + m.qty).join(' · ')}</div>${btnHtml}</div>`;
       }).join('');
       openModal('modal-wa');
     }
 
-    loadState();
+    // Eksekusi awal saat file dibuka
+    window.onload = loadState;
   </script>
 </body>
 </html>
+
+```
